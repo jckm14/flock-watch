@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0B0E11">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Flock Watch">
 <title>Flock Watch — ALPR proximity alerts</title>
 <style>
   :root{
@@ -108,6 +114,16 @@
   .empty{padding:30px 24px; text-align:center; color:var(--dim); font-size:14px; line-height:1.6}
   .footer{padding:14px 18px 22px; color:var(--dimmer); font-size:11px; line-height:1.55; border-top:1px solid var(--hair)}
   .footer a{color:var(--dim)}
+  #mapWrap{padding:0 12px 10px; position:relative}
+  #map{width:100%; height:320px; border-radius:14px; overflow:hidden; background:var(--panel-2); border:1px solid var(--hair)}
+  .leaflet-container{background:var(--panel-2); font-family:var(--ui)}
+  #recenterBtn{position:absolute; right:22px; bottom:22px; z-index:600; background:var(--panel); color:var(--txt); border:1px solid var(--hair); border-radius:10px; padding:8px 12px; font-size:12px; font-weight:600; cursor:pointer; font-family:var(--ui)}
+  #recenterBtn:active{background:var(--panel-2)}
+  .coverage{margin:8px 14px 0; padding:9px 12px; border-radius:9px; font-size:12px; line-height:1.45; color:var(--dim); background:var(--panel); border-left:3px solid var(--dimmer)}
+  .coverage.warn{border-left-color:var(--amber); color:var(--txt)}
+  .cam{cursor:pointer}
+  .cam:active{background:var(--panel)}
+  .cam .chev{color:var(--dimmer); font-size:15px; flex:none; margin-left:2px}
 
   /* settings sheet */
   .sheet{position:fixed; inset:0; background:rgba(5,7,9,.6); backdrop-filter:blur(3px); display:none; align-items:flex-end; justify-content:center; z-index:40}
@@ -160,7 +176,10 @@
   <section id="live">
     <div class="topbar">
       <div class="brand"><span class="dot" id="gpsDot"></span>Flock Watch</div>
-      <button class="iconbtn" id="settingsBtn" aria-label="Settings">⚙</button>
+      <div style="display:flex; gap:8px">
+        <button class="iconbtn" id="viewBtn" style="width:auto; padding:0 13px; font-size:13px; font-weight:600">Map</button>
+        <button class="iconbtn" id="settingsBtn" aria-label="Settings">⚙</button>
+      </div>
     </div>
 
     <div class="status" id="statusBand">
@@ -169,7 +188,7 @@
       <div class="substate" id="subState">Finding your position</div>
     </div>
 
-    <div class="radar-wrap">
+    <div class="radar-wrap" id="radarWrap">
       <div class="radar">
         <svg viewBox="0 0 220 220" id="radarSvg" aria-hidden="true">
           <defs>
@@ -191,17 +210,20 @@
         </svg>
       </div>
     </div>
+    <div id="mapWrap" style="display:none"><div id="map"></div><button id="recenterBtn">Recenter</button></div>
 
     <div class="listhead">
       <span class="eyebrow">Nearby cameras</span>
       <span class="eyebrow" id="countLabel" style="color:var(--dimmer)">—</span>
     </div>
+    <div id="coverage" class="coverage" style="display:none"></div>
     <ul class="list" id="camList"></ul>
     <div class="empty" id="emptyState" style="display:none">No ALPR cameras recorded within range on OpenStreetMap.<br>Stay alert — coverage is incomplete.</div>
 
     <div class="footer">
       <span id="updateLine">Waiting for first data pull…</span><br>
       Data © OpenStreetMap contributors, via the Overpass API &amp; the DeFlock project. Locations are crowdsourced and approximate.
+      Spotted a missing or wrong camera? <a href="https://deflock.me" target="_blank" rel="noopener">Contribute on DeFlock</a>.
     </div>
   </section>
 </div>
@@ -220,16 +242,35 @@
       <input type="range" id="rangeRange" min="300" max="3000" step="100" value="1000">
       <div class="hint">How far out the radar dial and list reach.</div>
     </div>
+    <div class="toggle"><span class="txt">Use miles &amp; feet</span>
+      <label class="switch"><input type="checkbox" id="unitsImperial"><span class="slider"></span></label>
+    </div>
     <div class="toggle"><span class="txt">Alert only when ahead</span>
       <label class="switch"><input type="checkbox" id="aheadOnly"><span class="slider"></span></label>
     </div>
     <div class="toggle"><span class="txt">Sound</span>
       <label class="switch"><input type="checkbox" id="soundOn" checked><span class="slider"></span></label>
     </div>
+    <div class="toggle"><span class="txt">Spoken alerts</span>
+      <label class="switch"><input type="checkbox" id="voiceOn" checked><span class="slider"></span></label>
+    </div>
     <div class="toggle"><span class="txt">Vibration</span>
       <label class="switch"><input type="checkbox" id="vibeOn" checked><span class="slider"></span></label>
     </div>
+    <button class="btn ghost" id="resetBtn" style="color:var(--red); border-color:rgba(229,72,77,.4)">Reset to defaults</button>
     <button class="btn ghost" id="closeSheet">Done</button>
+  </div>
+</div>
+
+<!-- camera detail -->
+<div class="sheet" id="camSheet">
+  <div class="card">
+    <h2 id="camTitle">Camera</h2>
+    <div id="camTags" style="display:flex; gap:8px; flex-wrap:wrap"></div>
+    <div id="camDetail" class="hint" style="font-size:13px; line-height:1.6"></div>
+    <a id="camOsm" class="btn ghost" target="_blank" rel="noopener" style="display:block; text-align:center; text-decoration:none">View / edit on OpenStreetMap</a>
+    <button class="btn ghost" id="camMap">Show on map</button>
+    <button class="btn ghost" id="camClose">Close</button>
   </div>
 </div>
 
@@ -249,15 +290,16 @@
 
   // ---------- state ----------
   var S = {
-    pos:null, heading:null, speed:null,
+    pos:null, heading:null, speed:null, mapView:false, follow:true,
     cams:new Map(),                 // id -> {id,lat,lon,flock,kind,label}
     fetchCenter:null, lastFetch:0, fetching:false,
     alerted:new Map(),              // id -> last alert time (for hysteresis)
     settings:load()
   };
 
+  function defaults(){ return {alert:250, range:1000, aheadOnly:false, sound:true, voice:true, vibe:true, units:"imperial"}; }
   function load(){
-    var d={alert:250, range:1000, aheadOnly:false, sound:true, vibe:true};
+    var d=defaults();
     try{ var s=JSON.parse(localStorage.getItem("flockwatch")||"{}"); return Object.assign(d,s);}catch(e){return d;}
   }
   var saveConfirmTimer;
@@ -288,8 +330,19 @@
     return h+" o’clock";
   }
   function fmtDist(m){
-    if(m<950) return {n:Math.round(m/5)*5, u:"m"};
-    return {n:(m/1000).toFixed(m<9500?1:0), u:"km"};
+    if(S.settings.units==="imperial"){
+      var ft=m*3.28084;
+      if(ft<1000) return {n:Math.round(ft/10)*10, u:"ft", full:"feet"};
+      var mi=m/1609.344; return {n:mi.toFixed(1), u:"mi", full:(mi.toFixed(1)==="1.0"?"mile":"miles")};
+    }
+    if(m<950) return {n:Math.round(m/5)*5, u:"m", full:"meters"};
+    var km=m/1000; return {n:km.toFixed(m<9500?1:0), u:"km", full:(km.toFixed(1)==="1.0"?"kilometer":"kilometers")};
+  }
+  function fmtSetting(m){ var f=fmtDist(m); return f.n+" "+f.u; }
+  function etaStr(d){
+    if(!S.speed || S.speed<1.5) return "";   // only meaningful while moving (~3.4 mph+)
+    var s=d/S.speed;
+    return s<90 ? Math.round(s)+" s" : Math.round(s/60)+" min";
   }
 
   // ---------- overpass ----------
@@ -329,8 +382,9 @@
             });
           });
           S.lastFetch=Date.now(); S.fetchCenter={lat:lat,lon:lon}; S.fetching=false;
+          pruneCams(lat,lon); persistCams();
           var stamp=new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
-          $("updateLine").textContent="Updated "+stamp+" · "+S.cams.size+" cameras within "+(FETCH_RADIUS/1000)+" km";
+          $("updateLine").textContent="Updated "+stamp+" · "+S.cams.size+" cameras cached for offline";
           recompute();
         })
         .catch(function(){ tryEndpoint(i+1); });
@@ -341,7 +395,15 @@
   function onPosition(p){
     $("gpsDot").classList.add("live");
     S.pos={lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy};
-    if(p.coords.heading!=null && !isNaN(p.coords.heading) && p.coords.speed>0.5) S.heading=p.coords.heading;
+    if(p.coords.heading!=null && !isNaN(p.coords.heading) && p.coords.speed>0.5){
+      var h=p.coords.heading;
+      if(S.heading==null) S.heading=h;
+      else { // circular low-pass so "ahead" detection doesn't jitter
+        var a=toRad(S.heading), b=toRad(h);
+        var sx=Math.sin(a)*0.7+Math.sin(b)*0.3, cv=Math.cos(a)*0.7+Math.cos(b)*0.3;
+        S.heading=(Math.atan2(sx,cv)*180/Math.PI+360)%360;
+      }
+    }
     S.speed=p.coords.speed;
 
     // fetch on first fix or after moving far enough
@@ -374,6 +436,7 @@
     list.sort(function(a,b){return a.d-b.d;});
     render(list, range, alertD);
     checkAlerts(list, alertD);
+    if(S.mapView) updateMap(list);
   }
 
   // ---------- rendering ----------
@@ -404,12 +467,14 @@
         state.textContent="All clear"; state.style.color="var(--green)";
       }
       var dir = S.heading!=null ? (nearest.ahead?"ahead of you":clock(nearest.rel)) : "to the "+compass(nearest.b);
-      sub.innerHTML="Nearest: <b>"+nearest.c.label+"</b> · "+dir;
+      var eta = nearest.ahead ? etaStr(nearest.d) : "";
+      sub.innerHTML="Nearest: <b>"+esc(nearest.c.label)+"</b> · "+dir+(eta?" · ~"+eta:"");
     }
 
     $("hdgUp").textContent = S.heading!=null ? "AHEAD" : "N";
     drawBlips(list, range);
     drawList(list, alertD);
+    updateCoverage();
   }
 
   function compass(b){var dirs=["N","NE","E","SE","S","SW","W","NW"];return dirs[Math.round(b/45)%8];}
@@ -440,8 +505,10 @@
     list.slice(0,40).forEach(function(it){
       var li=document.createElement("li");
       li.className="cam"+(it.c.flock?" flock":"")+(it.ahead && it.d<=alertD*2?" ahead":"");
+      li.dataset.id=it.c.id;
       var f=fmtDist(it.d);
       var dir = S.heading!=null ? (it.ahead?"↑ ahead":clock(it.rel)) : compass(it.b);
+      if(it.ahead){ var e=etaStr(it.d); if(e) dir+=" · "+e; }
       li.innerHTML=
         '<span class="pin"></span>'+
         '<div class="meta"><div class="row1">'+
@@ -449,9 +516,50 @@
           (it.c.flock?'<span class="tag flock">Flock</span>':'<span class="tag alpr">ALPR</span>')+
         '</div><div class="sub">'+esc(it.c.kind)+'</div></div>'+
         '<div><div class="dist">'+f.n+'<span style="font-size:11px;color:var(--dim)"> '+f.u+'</span></div>'+
-        '<div class="dir">'+dir+'</div></div>';
+        '<div class="dir">'+dir+'</div></div>'+
+        '<span class="chev">›</span>';
       ul.appendChild(li);
     });
+  }
+  function updateCoverage(){
+    var el=$("coverage"); if(!el) return;
+    var msg="", warn=false, show=true;
+    if(!S.pos){ show=false; }
+    else if(!S.fetchCenter && S.cams.size===0){ msg="Loading camera data for your area…"; }
+    else if(!S.fetchCenter && S.cams.size>0){ msg="Showing saved cameras — connect to refresh coverage for where you are now."; warn=true; }
+    else if(S.fetchCenter){
+      var dd=haversine(S.pos.lat,S.pos.lon,S.fetchCenter.lat,S.fetchCenter.lon);
+      if(dd>FETCH_RADIUS){ msg="You've moved beyond the last refreshed area — coverage here may be stale. Reconnect to update."; warn=true; }
+      else {
+        var near=0; S.cams.forEach(function(c){ if(haversine(S.pos.lat,S.pos.lon,c.lat,c.lon)<=FETCH_RADIUS) near++; });
+        if(near===0){ msg="No cameras mapped within "+fmtSetting(FETCH_RADIUS)+". Could be a clear area — or just not mapped yet. Stay alert."; warn=true; }
+        else { msg="Coverage is crowdsourced and uneven — a clear radar isn't a guarantee."; }
+      }
+    }
+    el.style.display = show?"block":"none";
+    el.className = "coverage"+(warn?" warn":"");
+    el.textContent = msg;
+  }
+  function openCamSheet(id){
+    var c=S.cams.get(id); if(!c) return;
+    $("camTitle").textContent = c.label || (c.flock?"Flock camera":"ALPR camera");
+    var tags = (c.flock?'<span class="tag flock">Flock</span>':'<span class="tag alpr">ALPR</span>')+
+               '<span class="tag alpr" style="background:rgba(124,136,150,.16);color:var(--dim)">'+esc(c.kind)+'</span>';
+    $("camTags").innerHTML=tags;
+    var det="";
+    if(S.pos){ var d=haversine(S.pos.lat,S.pos.lon,c.lat,c.lon); var f=fmtDist(d); det+=f.n+" "+f.u+" away, to the "+compass(bearing(S.pos.lat,S.pos.lon,c.lat,c.lon))+".<br>"; }
+    det += "Location: "+c.lat.toFixed(5)+", "+c.lon.toFixed(5)+"<br>";
+    det += "Community-mapped data. If this looks wrong, moved, or missing, you can verify or correct it on OpenStreetMap — your edit feeds back to everyone.";
+    $("camDetail").innerHTML=det;
+    var osmId = id.charAt(0)==="n" ? id.slice(1) : id;
+    $("camOsm").href="https://www.openstreetmap.org/node/"+osmId;
+    $("camMap").onclick=function(){
+      $("camSheet").classList.remove("on");
+      S.follow=false; S.mapView=true;
+      $("radarWrap").style.display="none"; $("mapWrap").style.display="block"; $("viewBtn").textContent="Radar";
+      ensureLeaflet(function(){ initMap(); setTimeout(function(){ if(map){ map.invalidateSize(); recompute(); map.setView([c.lat,c.lon],17);} },90); });
+    };
+    $("camSheet").classList.add("on");
   }
   function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 
@@ -476,17 +584,23 @@
   }
   function checkAlerts(list, alertD){
     var now=Date.now();
+    var triggers=[];
     list.forEach(function(it){
       var within = it.d<=alertD && (!S.settings.aheadOnly || it.ahead);
-      var last=S.alerted.get(it.c.id)||0;
       if(within){
-        if(now-last>20000){ fire(it); S.alerted.set(it.c.id,now); }
+        if(now-(S.alerted.get(it.c.id)||0)>20000) triggers.push(it);
       } else if(it.d>alertD*1.6){ S.alerted.delete(it.c.id); } // hysteresis reset
     });
+    if(!triggers.length) return;
+    // one announcement per event: prefer the nearest camera that's ahead
+    triggers.sort(function(a,b){ if(a.ahead!==b.ahead) return a.ahead?-1:1; return a.d-b.d; });
+    triggers.forEach(function(it){ S.alerted.set(it.c.id, now); }); // cool down everything that triggered
+    fire(triggers[0]);
   }
   function fire(it){
     var urgent=it.ahead;
     beep(urgent);
+    speak(it);
     if(S.settings.vibe && navigator.vibrate) navigator.vibrate(urgent?[120,60,120]:[200]);
     var f=fmtDist(it.d);
     var title=(it.c.flock?"Flock camera ":"ALPR camera ")+(it.ahead?"ahead":"nearby");
@@ -495,6 +609,21 @@
     if("Notification" in window && Notification.permission==="granted"){
       try{ new Notification(title,{body:bodytxt, tag:it.c.id, silent:!S.settings.sound}); }catch(e){}
     }
+  }
+  function speak(it){
+    if(!S.settings.voice || !("speechSynthesis" in window)) return;
+    try{
+      var f=fmtDist(it.d);
+      var who = it.c.flock ? "Flock camera" : "License plate camera";
+      var where = it.ahead ? "ahead" : "nearby";
+      var u=new SpeechSynthesisUtterance(who+" "+where+", "+f.n+" "+f.full);
+      u.rate=1.05;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }catch(e){}
+  }
+  function speakTest(){
+    try{ if("speechSynthesis" in window){ var u=new SpeechSynthesisUtterance("Voice alerts on"); speechSynthesis.cancel(); speechSynthesis.speak(u); } }catch(e){}
   }
 
   // ---------- toast ----------
@@ -506,20 +635,33 @@
 
   // ---------- settings wiring ----------
   function syncSettingsUI(){
-    $("alertRange").value=S.settings.alert; $("alertVal").textContent=S.settings.alert+" m";
-    $("rangeRange").value=S.settings.range; $("rangeVal").textContent=(S.settings.range/1000).toFixed(1)+" km";
+    $("alertRange").value=S.settings.alert; $("alertVal").textContent=fmtSetting(S.settings.alert);
+    $("rangeRange").value=S.settings.range; $("rangeVal").textContent=fmtSetting(S.settings.range);
     $("aheadOnly").checked=S.settings.aheadOnly;
+    $("unitsImperial").checked=S.settings.units==="imperial";
     $("soundOn").checked=S.settings.sound;
+    $("voiceOn").checked=S.settings.voice;
     $("vibeOn").checked=S.settings.vibe;
   }
-  $("alertRange").addEventListener("input",function(){S.settings.alert=+this.value;$("alertVal").textContent=this.value+" m";save();recompute();});
-  $("rangeRange").addEventListener("input",function(){S.settings.range=+this.value;$("rangeVal").textContent=(this.value/1000).toFixed(1)+" km";save();recompute();});
+  $("alertRange").addEventListener("input",function(){S.settings.alert=+this.value;$("alertVal").textContent=fmtSetting(S.settings.alert);save();recompute();});
+  $("rangeRange").addEventListener("input",function(){S.settings.range=+this.value;$("rangeVal").textContent=fmtSetting(S.settings.range);save();recompute();});
   $("aheadOnly").addEventListener("change",function(){S.settings.aheadOnly=this.checked;save();recompute();});
+  $("unitsImperial").addEventListener("change",function(){S.settings.units=this.checked?"imperial":"metric";save();syncSettingsUI();recompute();});
   $("soundOn").addEventListener("change",function(){S.settings.sound=this.checked;save();});
+  $("voiceOn").addEventListener("change",function(){S.settings.voice=this.checked;save(); if(this.checked) speakTest();});
   $("vibeOn").addEventListener("change",function(){S.settings.vibe=this.checked;save();});
+  $("resetBtn").addEventListener("click",function(){
+    if(!window.confirm("Reset all settings to defaults?")) return;
+    S.settings=defaults(); save(); syncSettingsUI(); recompute(); toast("Settings reset to defaults");
+  });
+  $("viewBtn").addEventListener("click",toggleView);
   $("settingsBtn").addEventListener("click",function(){syncSettingsUI();$("sheet").classList.add("on");});
   $("closeSheet").addEventListener("click",function(){$("sheet").classList.remove("on");});
   $("sheet").addEventListener("click",function(e){if(e.target===this)this.classList.remove("on");});
+  $("camList").addEventListener("click",function(e){ var li=e.target.closest("li.cam"); if(li && li.dataset.id) openCamSheet(li.dataset.id); });
+  $("camClose").addEventListener("click",function(){$("camSheet").classList.remove("on");});
+  $("camSheet").addEventListener("click",function(e){if(e.target===this)this.classList.remove("on");});
+  $("recenterBtn").addEventListener("click",function(){ S.follow=true; if(map && S.pos) map.setView([S.pos.lat,S.pos.lon], map.getZoom()<13?16:map.getZoom()); });
 
   // ---------- start ----------
   $("startBtn").addEventListener("click",function(){
@@ -527,6 +669,8 @@
     // prime audio on the user gesture so beeps work later
     try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==="suspended")audioCtx.resume(); }catch(e){}
     if("Notification" in window && Notification.permission==="default"){ Notification.requestPermission(); }
+    // prime speech engine on the user gesture so spoken alerts work later (esp. iOS)
+    try{ if("speechSynthesis" in window){ var w=new SpeechSynthesisUtterance(" "); w.volume=0; speechSynthesis.speak(w); } }catch(e){}
     gate.style.display="none"; live.classList.add("on");
     navigator.geolocation.watchPosition(onPosition,onGeoError,{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
   });
@@ -535,6 +679,79 @@
   document.addEventListener("visibilitychange",function(){
     if(document.visibilityState==="visible" && "wakeLock" in navigator){ navigator.wakeLock.request("screen").catch(function(){}); }
   });
+
+  // ---------- map view (lazy-loaded Leaflet) ----------
+  var leafletReady=false, map=null, userMarker=null, alertCircle=null, camLayer=null;
+  function toggleView(){
+    S.mapView=!S.mapView;
+    $("radarWrap").style.display = S.mapView?"none":"";
+    $("mapWrap").style.display   = S.mapView?"block":"none";
+    $("viewBtn").textContent     = S.mapView?"Radar":"Map";
+    if(S.mapView){ S.follow=true; ensureLeaflet(function(){ initMap(); setTimeout(function(){ if(map) map.invalidateSize(); recompute(); },60); }); }
+  }
+  function ensureLeaflet(cb){
+    if(leafletReady || window.L){ leafletReady=true; cb(); return; }
+    var css=document.createElement("link"); css.rel="stylesheet";
+    css.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+    document.head.appendChild(css);
+    var s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+    s.onload=function(){ leafletReady=true; cb(); };
+    s.onerror=function(){ toast("Couldn’t load the map — you may be offline. Radar still works.", true); };
+    document.body.appendChild(s);
+  }
+  function initMap(){
+    if(map || !window.L) return;
+    var c=S.pos?[S.pos.lat,S.pos.lon]:[39.5,-98.35];
+    map=L.map("map",{zoomControl:true}).setView(c, S.pos?15:4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19, attribution:"© OpenStreetMap contributors"}).addTo(map);
+    camLayer=L.layerGroup().addTo(map);
+    alertCircle=L.circle(c,{radius:S.settings.alert, color:"#FFB02E", weight:1, fillColor:"#FFB02E", fillOpacity:0.07}).addTo(map);
+    userMarker=L.circleMarker(c,{radius:7, color:"#0B0E11", weight:2, fillColor:"#36C691", fillOpacity:1}).addTo(map);
+    map.on("dragstart",function(){ S.follow=false; });
+  }
+  function updateMap(list){
+    if(!map || !window.L) return;
+    if(S.pos){
+      var c=[S.pos.lat,S.pos.lon];
+      userMarker.setLatLng(c); alertCircle.setLatLng(c).setRadius(S.settings.alert);
+      if(S.follow) map.setView(c, map.getZoom()<13?15:map.getZoom(), {animate:false});
+    }
+    camLayer.clearLayers();
+    list.slice(0,300).forEach(function(it){
+      var col=it.c.flock?"#B57BFF":"#FFB02E";
+      L.circleMarker([it.c.lat,it.c.lon],{radius:5, color:col, weight:1, fillColor:col, fillOpacity:.9})
+        .bindPopup((it.c.flock?"Flock Safety":"ALPR")+" — "+esc(it.c.label))
+        .addTo(camLayer);
+    });
+  }
+
+  // ---------- offline camera cache ----------
+  function persistCams(){
+    try{
+      var arr=[]; S.cams.forEach(function(c){ arr.push(c); });
+      localStorage.setItem("flockwatch_cams", JSON.stringify({t:Date.now(), cams:arr}));
+    }catch(e){}
+  }
+  function pruneCams(lat,lon){
+    S.cams.forEach(function(c){ if(haversine(lat,lon,c.lat,c.lon)>15000) S.cams.delete(c.id); });
+  }
+  function loadCams(){
+    try{
+      var raw=JSON.parse(localStorage.getItem("flockwatch_cams")||"null");
+      if(raw && raw.cams && raw.cams.length){
+        raw.cams.forEach(function(c){ S.cams.set(c.id,c); });
+        var stamp=new Date(raw.t).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+        $("updateLine").textContent="Showing "+S.cams.size+" saved cameras from "+stamp+" — go online to refresh";
+      }
+    }catch(e){}
+  }
+  loadCams();
+
+  // ---------- service worker (offline + installable) ----------
+  if("serviceWorker" in navigator){
+    window.addEventListener("load",function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+  }
 })();
 </script>
 </body>

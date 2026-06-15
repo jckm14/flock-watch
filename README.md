@@ -4,22 +4,52 @@ A heads-up detector for automated license-plate readers (ALPRs). It pulls live
 camera locations from OpenStreetMap and alerts you with sound, vibration, and a
 banner when one is near — or coming up ahead in your direction of travel.
 
-It's a single static HTML file. No build step, no dependencies, no server, no
-account. Your location never leaves your device except as an anonymous radius
-query to the public OpenStreetMap Overpass API.
+It's a static web app — no build step, no dependencies, no server, no account.
+Your location never leaves your device except as an anonymous radius query to the
+public OpenStreetMap Overpass API.
+
+**Repository contents** — upload all of these to the repo for the app and offline
+install to work: `index.html`, `manifest.json`, `sw.js`, and the four icons
+(`icon-180.png`, `icon-192.png`, `icon-512.png`, `icon-512-maskable.png`).
 
 ## What it does
 
 - Fetches every `surveillance:type=ALPR` node within ~6 km from the Overpass API
   (the same OpenStreetMap data the [DeFlock](https://deflock.me) project maintains),
   re-pulling automatically as you move so the data stays current.
-- Shows nearby cameras on a radar dial, oriented to your direction of travel.
+- Shows nearby cameras on a radar dial, oriented to your (heading-smoothed)
+  direction of travel — or on a real street map (tap **Map** to switch).
   **Violet** = confirmed Flock Safety units; **amber** = other ALPR vendors.
-- Names the nearest camera and whether it's ahead of you or off to one side.
-- Alerts when a camera enters your chosen range (default 250 m). "Ahead" cameras
-  get an urgent double-beep; a 20-second per-camera cooldown stops it nagging.
-- Tunable alert distance, radar range, sound, vibration, and an "alert only when
-  ahead" mode for highway use. Settings persist on your device.
+- Names the nearest camera, whether it's ahead or off to one side, and — when
+  you're moving — the estimated time until you reach it ("~12 s").
+- Alerts when a camera enters your chosen range (default 250 m) with sound,
+  **spoken voice** ("Flock camera ahead, 300 feet"), vibration, a banner, and
+  an optional system notification. "Ahead" cameras get an urgent double-beep; a
+  20-second per-camera cooldown stops it nagging.
+- **Works offline.** Installs as a PWA (its own icon, full-screen, instant launch)
+  and caches the last cameras it pulled, so alerts keep firing in dead-signal areas
+  against the most recent data. (The street map needs a connection for tiles.)
+- Tunable alert distance, radar range, units (**miles & feet** or metric), sound,
+  voice, vibration, and an "alert only when ahead" mode for highway use. A
+  **Reset to defaults** button is in settings. Everything persists on your device.
+- **Honest about coverage.** A banner flags when you're seeing saved/stale data,
+  when you've moved beyond the last refreshed area, or when nothing is mapped
+  nearby — because a clear radar can mean "no cameras" *or* "not mapped yet."
+- **Tap any camera** to see its details and open it on OpenStreetMap, where you
+  can verify or correct it. Wrong or missing cameras can be reported via the
+  DeFlock link in the footer — fixes flow back to the shared dataset.
+
+## Install it as an app
+
+Open the live https URL on your phone, then:
+
+- **iPhone (Safari):** Share button → **Add to Home Screen**.
+- **Android (Chrome):** menu (⋮) → **Install app** / **Add to Home screen**.
+
+It then launches like a native app with its own icon and no browser bars, and runs
+offline against cached cameras. Note: like any web app, it only tracks and alerts
+while open and awake — phones suspend background pages, so it can't monitor with the
+screen off.
 
 ## Run it (must be served over HTTPS)
 
