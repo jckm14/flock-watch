@@ -134,7 +134,11 @@
   /* settings sheet */
   .sheet{position:fixed; inset:0; background:rgba(5,7,9,.6); backdrop-filter:blur(3px); display:none; align-items:flex-end; justify-content:center; z-index:2000}
   .sheet.on{display:flex}
-  .sheet .card{background:var(--panel); width:100%; max-width:560px; max-height:90vh; overflow-y:auto; border-radius:20px 20px 0 0; border-top:1px solid var(--hair); padding:20px 20px calc(26px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:20px}
+  .sheet .card{background:var(--panel); width:100%; max-width:560px; max-height:90vh; max-height:90dvh; overflow-y:auto; border-radius:20px 20px 0 0; border-top:1px solid var(--hair); padding:20px 20px calc(26px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:20px}
+  /* settings card: scroll the options, pin the action buttons so Done is always reachable */
+  #sheet .card{overflow:hidden}
+  #sheet .sscroll{flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; gap:20px; padding-bottom:4px}
+  #sheet .sactions{flex:0 0 auto; display:flex; flex-direction:column; gap:12px}
   .sheet h2{font-size:17px; font-weight:700}
   .setrow{display:flex; flex-direction:column; gap:9px}
   .setrow .lbl{display:flex; justify-content:space-between; align-items:baseline}
@@ -238,6 +242,7 @@
 <!-- settings -->
 <div class="sheet" id="sheet">
   <div class="card">
+    <div class="sscroll">
     <h2>Settings</h2>
     <div class="setrow">
       <div class="lbl"><span class="txt" style="font-size:14px;font-weight:600">Alert distance</span><span class="v" id="alertVal">250 m</span></div>
@@ -274,8 +279,11 @@
       <input id="orsKey" type="password" autocomplete="off" placeholder="OpenRouteService API key" style="display:none">
       <div class="hint" id="orsHint" style="display:none">Free key at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>.</div>
     </div>
-    <button class="btn ghost" id="resetBtn" style="color:var(--red); border-color:rgba(229,72,77,.4)">Reset to defaults</button>
-    <button class="btn ghost" id="closeSheet">Done</button>
+    </div>
+    <div class="sactions">
+      <button class="btn ghost" id="resetBtn" style="color:var(--red); border-color:rgba(229,72,77,.4)">Reset to defaults</button>
+      <button class="btn ghost" id="closeSheet">Done</button>
+    </div>
   </div>
 </div>
 
