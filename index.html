@@ -260,7 +260,12 @@
     var d={alert:250, range:1000, aheadOnly:false, sound:true, vibe:true};
     try{ var s=JSON.parse(localStorage.getItem("flockwatch")||"{}"); return Object.assign(d,s);}catch(e){return d;}
   }
-  function save(){ try{ localStorage.setItem("flockwatch", JSON.stringify(S.settings)); }catch(e){} }
+  var saveConfirmTimer;
+  function save(){
+    try{ localStorage.setItem("flockwatch", JSON.stringify(S.settings)); }catch(e){}
+    clearTimeout(saveConfirmTimer);
+    saveConfirmTimer=setTimeout(function(){ toast("Settings saved"); }, 500);
+  }
 
   // ---------- dom ----------
   var $=function(id){return document.getElementById(id);};
