@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor: https://localhost; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: capacitor: https://localhost https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; connect-src 'self' capacitor: https://localhost https://overpass-api.de https://overpass.kumi.systems; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0B0E11">
 <link rel="manifest" href="manifest.json">
@@ -300,7 +301,19 @@
   function defaults(){ return {alert:250, range:1000, aheadOnly:false, sound:true, voice:true, vibe:true, units:"imperial"}; }
   function load(){
     var d=defaults();
-    try{ var s=JSON.parse(localStorage.getItem("flockwatch")||"{}"); return Object.assign(d,s);}catch(e){return d;}
+    try{
+      var s=JSON.parse(localStorage.getItem("flockwatch")||"{}");
+      if(s && typeof s==="object"){
+        if(typeof s.alert==="number" && isFinite(s.alert)) d.alert=Math.min(2000,Math.max(25,s.alert));
+        if(typeof s.range==="number" && isFinite(s.range)) d.range=Math.min(5000,Math.max(100,s.range));
+        d.aheadOnly = s.aheadOnly===true;
+        d.sound = s.sound!==false;
+        d.voice = s.voice!==false;
+        d.vibe  = s.vibe!==false;
+        d.units = s.units==="metric" ? "metric" : "imperial";
+      }
+    }catch(e){}
+    return d;
   }
   var saveConfirmTimer;
   function save(){
@@ -561,7 +574,7 @@
     };
     $("camSheet").classList.add("on");
   }
-  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+  function esc(s){return String(s).replace(/[&<>"'/]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","/":"&#47;"}[c];});}
 
   // ---------- alerts ----------
   var audioCtx=null;
@@ -740,7 +753,12 @@
     try{
       var raw=JSON.parse(localStorage.getItem("flockwatch_cams")||"null");
       if(raw && raw.cams && raw.cams.length){
-        raw.cams.forEach(function(c){ S.cams.set(c.id,c); });
+        raw.cams.forEach(function(c){
+          if(c && typeof c.id==="string" && isFinite(c.lat) && isFinite(c.lon)){
+            c.lat=+c.lat; c.lon=+c.lon; c.flock=!!c.flock;
+            S.cams.set(c.id,c);
+          }
+        });
         var stamp=new Date(raw.t).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
         $("updateLine").textContent="Showing "+S.cams.size+" saved cameras from "+stamp+" — go online to refresh";
       }
