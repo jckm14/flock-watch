@@ -405,11 +405,20 @@
   }
 
   // ---------- core loop ----------
+  // Browser geolocation callback → normalize coords and hand to the shared core.
   function onPosition(p){
+    var c=p.coords||{};
+    ingestPosition({ lat:c.latitude, lon:c.longitude, acc:c.accuracy, heading:c.heading, speed:c.speed });
+  }
+  // Shared position handler. Takes a plain {lat, lon, heading?, speed?, acc?}
+  // so both the browser watcher and the native background watcher drive identical logic.
+  function ingestPosition(p){
+    if(!p || !isFinite(p.lat) || !isFinite(p.lon)) return;
     $("gpsDot").classList.add("live");
-    S.pos={lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy};
-    if(p.coords.heading!=null && !isNaN(p.coords.heading) && p.coords.speed>0.5){
-      var h=p.coords.heading;
+    S.pos={lat:+p.lat, lon:+p.lon, acc:(isFinite(p.acc)?+p.acc:null)};
+    var spd = isFinite(p.speed) ? +p.speed : null;
+    if(p.heading!=null && !isNaN(p.heading) && spd!=null && spd>0.5){
+      var h=+p.heading;
       if(S.heading==null) S.heading=h;
       else { // circular low-pass so "ahead" detection doesn't jitter
         var a=toRad(S.heading), b=toRad(h);
@@ -417,7 +426,7 @@
         S.heading=(Math.atan2(sx,cv)*180/Math.PI+360)%360;
       }
     }
-    S.speed=p.coords.speed;
+    S.speed=spd;
 
     // fetch on first fix or after moving far enough
     if(!S.fetchCenter){ fetchCams(S.pos.lat,S.pos.lon); }
@@ -610,6 +619,7 @@
     triggers.forEach(function(it){ S.alerted.set(it.c.id, now); }); // cool down everything that triggered
     fire(triggers[0]);
   }
+  var nativeAlertHandler=null;   // set by the native bridge to fire OS notifications
   function fire(it){
     var urgent=it.ahead;
     beep(urgent);
@@ -619,7 +629,9 @@
     var title=(it.c.flock?"Flock camera ":"ALPR camera ")+(it.ahead?"ahead":"nearby");
     var bodytxt=Math.round(f.n)+" "+f.u+" · "+it.c.label;
     toast(title+" — "+bodytxt, false);
-    if("Notification" in window && Notification.permission==="granted"){
+    if(nativeAlertHandler){
+      try{ nativeAlertHandler({title:title, body:bodytxt, id:it.c.id, silent:!S.settings.sound}); }catch(e){}
+    } else if("Notification" in window && Notification.permission==="granted"){
       try{ new Notification(title,{body:bodytxt, tag:it.c.id, silent:!S.settings.sound}); }catch(e){}
     }
   }
@@ -677,15 +689,22 @@
   $("recenterBtn").addEventListener("click",function(){ S.follow=true; if(map && S.pos) map.setView([S.pos.lat,S.pos.lon], map.getZoom()<13?16:map.getZoom()); });
 
   // ---------- start ----------
+  function isNative(){ return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); }
   $("startBtn").addEventListener("click",function(){
-    if(!("geolocation" in navigator)){ toast("This browser has no geolocation support.",true); return; }
+    var native=isNative();
+    if(!native && !("geolocation" in navigator)){ toast("This browser has no geolocation support.",true); return; }
     // prime audio on the user gesture so beeps work later
     try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==="suspended")audioCtx.resume(); }catch(e){}
-    if("Notification" in window && Notification.permission==="default"){ Notification.requestPermission(); }
+    if(!native && "Notification" in window && Notification.permission==="default"){ Notification.requestPermission(); }
     // prime speech engine on the user gesture so spoken alerts work later (esp. iOS)
     try{ if("speechSynthesis" in window){ var w=new SpeechSynthesisUtterance(" "); w.volume=0; speechSynthesis.speak(w); } }catch(e){}
     gate.style.display="none"; live.classList.add("on");
-    navigator.geolocation.watchPosition(onPosition,onGeoError,{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+    if(native){
+      // the native bridge owns geolocation (incl. background); tell it to start
+      document.dispatchEvent(new CustomEvent("flockwatch:start"));
+    } else {
+      navigator.geolocation.watchPosition(onPosition,onGeoError,{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+    }
   });
 
   // keep screen-on hint via wake lock if available (best-effort)
@@ -765,6 +784,23 @@
     }catch(e){}
   }
   loadCams();
+
+  // ---------- public API + native bridge ----------
+  // Lets the bundled native bridge (native-bridge.js) drive the same logic.
+  window.FlockWatch = {
+    ingestPosition: ingestPosition,                 // {lat, lon, heading?, speed?, acc?}
+    reportError: onGeoError,                         // {code} like a GeolocationPositionError
+    setAlertHandler: function(fn){ nativeAlertHandler = (typeof fn==="function") ? fn : null; },
+    isNative: isNative
+  };
+  // On native only, pull in the bundled bridge (absent on the web build, so no 404 there).
+  if(isNative()){
+    var nb=document.createElement("script"); nb.src="native-bridge.js";
+    nb.onerror=function(){ /* fall back to in-app geolocation if the bridge is missing */
+      try{ if("geolocation" in navigator) navigator.geolocation.watchPosition(onPosition,onGeoError,{enableHighAccuracy:true,maximumAge:2000,timeout:15000}); }catch(e){}
+    };
+    document.body.appendChild(nb);
+  }
 
   // ---------- service worker (offline + installable) ----------
   if("serviceWorker" in navigator){
