@@ -130,6 +130,11 @@
   #routeProvider,#orsKey{width:100%; background:var(--panel-2); border:1px solid var(--hair); color:var(--txt); font-family:var(--ui); font-size:14px; padding:11px 12px; border-radius:10px}
   #routeProvider:focus,#orsKey:focus{outline:none; border-color:var(--amber)}
   #routeResult b{color:var(--txt)}
+  #offRoute{display:none; align-items:center; gap:10px; margin:10px 14px 0; padding:10px 12px; border-radius:10px; background:rgba(255,176,46,.12); border:1px solid rgba(255,176,46,.4); color:var(--txt); font-size:13px}
+  #offRoute.on{display:flex}
+  #offRoute span{flex:1; line-height:1.35}
+  #offRoute #offRouteReplan{appearance:none; cursor:pointer; font-family:var(--ui); font-weight:700; font-size:12px; border:none; border-radius:8px; background:var(--amber); color:#1a1206; padding:8px 11px; flex:none}
+  #offRoute #offRouteDismiss{appearance:none; cursor:pointer; background:transparent; border:none; color:var(--dim); font-size:20px; line-height:1; padding:0 2px; flex:none}
 
   /* settings sheet */
   .sheet{position:fixed; inset:0; background:rgba(5,7,9,.6); backdrop-filter:blur(3px); display:none; align-items:flex-end; justify-content:center; z-index:2000}
@@ -192,6 +197,8 @@
         <button class="iconbtn" id="settingsBtn" aria-label="Settings">⚙</button>
       </div>
     </div>
+
+    <div id="offRoute"><span>You've left the planned route.</span><button id="offRouteReplan">Re-plan from here</button><button id="offRouteDismiss" aria-label="Dismiss">×</button></div>
 
     <div class="status" id="statusBand">
       <div class="state" id="stateText">Acquiring GPS…</div>
@@ -307,6 +314,7 @@
     <input id="routeDest" type="text" inputmode="search" placeholder="Destination — address or place name" autocomplete="off">
     <button class="btn" id="routeGo">Find routes</button>
     <div id="routeResult" class="hint" style="min-height:18px"></div>
+    <button class="btn ghost" id="routeReplan" style="display:none">Re-plan from current position</button>
     <button class="btn ghost" id="routeClear">Clear route</button>
     <button class="btn ghost" id="routeClose">Close</button>
   </div>
@@ -329,6 +337,7 @@
   // ---------- state ----------
   var S = {
     pos:null, heading:null, speed:null, mapView:false, follow:true,
+    activeRoute:null, offRouteSince:null, offRouteLastPrompt:0, offRouteDismissed:false,
     cams:new Map(),                 // id -> {id,lat,lon,flock,kind,label}
     fetchCenter:null, lastFetch:0, fetching:false,
     alerted:new Map(),              // id -> last alert time (for hysteresis)
@@ -536,6 +545,7 @@
     list.sort(function(a,b){return a.d-b.d;});
     render(list, range, alertD);
     checkAlerts(list, alertD);
+    checkOffRoute();
     if(S.mapView) updateMap(list);
   }
 
@@ -801,6 +811,9 @@
   $("routeGo").addEventListener("click",function(){ planRoute($("routeDest").value); });
   $("routeDest").addEventListener("keydown",function(e){ if(e.key==="Enter"){ planRoute(this.value); } });
   $("routeClear").addEventListener("click",clearRoute);
+  $("routeReplan").addEventListener("click",replanFromHere);
+  $("offRouteReplan").addEventListener("click",function(){ $("routeSheet").classList.remove("on"); replanFromHere(); });
+  $("offRouteDismiss").addEventListener("click",function(){ S.offRouteDismissed=true; $("offRoute").classList.remove("on"); });
 
   // ---------- start ----------
   function isNative(){ return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); }
@@ -886,31 +899,68 @@
   var ROUTE_BUFFER=160; // metres: count cameras within this distance of a route line
   function setRouteMsg(html){ $("routeResult").innerHTML=html; }
 
+  function routeErr(err){
+    if(err && err.message==="no-key"){ setRouteMsg("Enter your OpenRouteService key in Settings, or switch the routing provider to the public demo."); return; }
+    setRouteMsg("Routing failed — the service may be busy, unreachable, or rejecting the key. Try again.");
+  }
   function planRoute(destText){
     if(!S.pos){ setRouteMsg("Waiting for your location — start watching first."); return; }
     destText=(destText||"").trim();
     if(!destText){ setRouteMsg("Enter a destination."); return; }
     setRouteMsg("Looking up destination…");
     geocode(destText).then(function(dest){
-      if(!dest){ setRouteMsg("Couldn’t find that destination."); return null; }
-      setRouteMsg("Finding routes…");
-      return fetchRoutes(S.pos, dest).then(function(routes){
-        if(!routes || !routes.length){ setRouteMsg("No driving route found."); return; }
-        return fetchCorridorCams(routes).then(function(){
-          var scored=routes.map(function(r){ return {r:r, cams:scoreRoute(r)}; });
-          scored.sort(function(a,b){ return (a.cams.count-b.cams.count) || (a.r.distance-b.r.distance); });
-          drawRoutes(scored, dest);
-          var best=scored[0];
-          var miles=(best.r.distance/1609.344).toFixed(1);
-          var mins=Math.round(best.r.duration/60);
-          var lines=scored.map(function(s,i){ return (i===0?"<b>Best:</b> ":"Alt: ")+s.cams.count+" cam"+(s.cams.count===1?"":"s"); }).join(" · ");
-          setRouteMsg("Lowest-exposure route: <b>"+best.cams.count+" camera"+(best.cams.count===1?"":"s")+"</b>, ~"+miles+" mi, ~"+mins+" min.<br>"+lines+"<br><span style=\"color:var(--dimmer)\">Counts only cameras mapped within "+ROUTE_BUFFER+" m of a route — coverage is incomplete. Tap Close to see the map.</span>");
-        });
+      if(!dest){ setRouteMsg("Couldn’t find that destination."); return; }
+      return runRoute(dest);
+    }).catch(routeErr);
+  }
+  // Re-plan from the current position to the same destination.
+  function replanFromHere(){
+    if(!S.activeRoute || !S.pos){ return; }
+    $("offRoute").classList.remove("on");
+    S.offRouteSince=null; S.offRouteDismissed=false; S.offRouteLastPrompt=Date.now();
+    setRouteMsg("Re-planning from your current position…");
+    runRoute(S.activeRoute.dest).catch(routeErr);
+  }
+  // Compute, score, draw routes from current position to dest; remember the chosen line.
+  function runRoute(dest){
+    setRouteMsg("Finding routes…");
+    return fetchRoutes(S.pos, dest).then(function(routes){
+      if(!routes || !routes.length){ setRouteMsg("No driving route found."); return; }
+      return fetchCorridorCams(routes).then(function(){
+        var scored=routes.map(function(r){ return {r:r, cams:scoreRoute(r)}; });
+        scored.sort(function(a,b){ return (a.cams.count-b.cams.count) || (a.r.distance-b.r.distance); });
+        var best=scored[0];
+        S.activeRoute={ pts:best.r.pts, dest:dest };
+        S.offRouteSince=null; S.offRouteDismissed=false; $("offRoute").classList.remove("on");
+        var rr=$("routeReplan"); if(rr) rr.style.display="block";
+        drawRoutes(scored, dest);
+        var miles=(best.r.distance/1609.344).toFixed(1);
+        var mins=Math.round(best.r.duration/60);
+        var lines=scored.map(function(s,i){ return (i===0?"<b>Best:</b> ":"Alt: ")+s.cams.count+" cam"+(s.cams.count===1?"":"s"); }).join(" · ");
+        setRouteMsg("Lowest-exposure route: <b>"+best.cams.count+" camera"+(best.cams.count===1?"":"s")+"</b>, ~"+miles+" mi, ~"+mins+" min.<br>"+lines+"<br><span style=\"color:var(--dimmer)\">Counts only cameras mapped within "+ROUTE_BUFFER+" m of a route — coverage is incomplete. Tap Close to see the map.</span>");
       });
-    }).catch(function(err){
-      if(err && err.message==="no-key"){ setRouteMsg("Enter your OpenRouteService key in Settings, or switch the routing provider to the public demo."); return; }
-      setRouteMsg("Routing failed — the service may be busy, unreachable, or rejecting the key. Try again.");
-    });
+    }).catch(routeErr);
+  }
+  // Distance (m) from a point to the nearest vertex of a route polyline.
+  function distToRoute(pts, lat, lon){
+    var min=Infinity;
+    for(var i=0;i<pts.length;i++){ var d=haversine(lat,lon,pts[i][0],pts[i][1]); if(d<min){ min=d; if(min<60) break; } }
+    return min;
+  }
+  // Called each position update: nudge once if you've clearly left the planned route.
+  function checkOffRoute(){
+    var el=$("offRoute");
+    if(!S.activeRoute || !S.pos){ if(el) el.classList.remove("on"); S.offRouteSince=null; return; }
+    var dmin=distToRoute(S.activeRoute.pts, S.pos.lat, S.pos.lon);
+    var now=Date.now();
+    if(dmin>160){
+      if(!S.offRouteSince) S.offRouteSince=now;
+      if(now-S.offRouteSince>20000 && now-S.offRouteLastPrompt>60000 && !S.offRouteDismissed){
+        el.classList.add("on"); S.offRouteLastPrompt=now;
+      }
+    } else if(dmin<110){
+      S.offRouteSince=null; S.offRouteDismissed=false; el.classList.remove("on");
+    }
   }
 
   function geocode(q){
@@ -1009,7 +1059,13 @@
       },90);
     });
   }
-  function clearRoute(){ if(routeLayer) routeLayer.clearLayers(); setRouteMsg(""); }
+  function clearRoute(){
+    if(routeLayer) routeLayer.clearLayers();
+    setRouteMsg("");
+    S.activeRoute=null; S.offRouteSince=null; S.offRouteDismissed=false;
+    $("offRoute").classList.remove("on");
+    var rr=$("routeReplan"); if(rr) rr.style.display="none";
+  }
 
   // ---------- offline camera cache ----------
   function persistCams(){
