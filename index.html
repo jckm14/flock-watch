@@ -342,6 +342,43 @@
     var h=Math.round(((rel%360)+360)%360/30); if(h===0)h=12;
     return h+" o’clock";
   }
+  // ---------- camera facing direction ----------
+  var CARD={N:0,NNE:22.5,NE:45,ENE:67.5,E:90,ESE:112.5,SE:135,SSE:157.5,S:180,SSW:202.5,SW:225,WSW:247.5,W:270,WNW:292.5,NW:315,NNW:337.5};
+  function dirToken(t){ // single token -> degrees or null
+    t=String(t).trim().toUpperCase();
+    if(t==="") return null;
+    if(/^-?\d+(\.\d+)?$/.test(t)){ var n=+t; if(!isFinite(n))return null; return ((n%360)+360)%360; }
+    return CARD.hasOwnProperty(t)?CARD[t]:null;
+  }
+  function parseDir(val){ // -> {deg:Number|null, omni:Bool, range:Bool}
+    if(val==null) return {deg:null,omni:false,range:false};
+    var s=String(val).trim();
+    if(s.indexOf("-")>0){ // a range like "315-45" or "0-359"
+      var p=s.split("-"); var a=dirToken(p[0]), b=dirToken(p[1]);
+      if(a==null||b==null) return {deg:null,omni:false,range:false};
+      var span=((b-a)%360+360)%360;
+      if(span===0||span>=350) return {deg:null,omni:true,range:true};
+      return {deg:(a+span/2)%360, omni:false, range:true};
+    }
+    var d=dirToken(s);
+    return {deg:d, omni:false, range:false};
+  }
+  function destPoint(lat,lon,brng,distM){ // offset a point by distance(m) along bearing(deg)
+    var R=6371000, d=distM/R, b=toRad(brng), p1=toRad(lat), l1=toRad(lon);
+    var p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(b));
+    var l2=l1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(p1), Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+    return [p2*180/Math.PI, ((l2*180/Math.PI+540)%360)-180];
+  }
+  // Is the camera pointing toward the user? Compares camera facing to the
+  // direction from camera back to the user. Returns "toward"/"away"/"across"/null.
+  function facingRelToUser(cam, brgUserToCam){
+    if(cam.dir==null) return null;
+    var camToUser=(brgUserToCam+180)%360;            // direction from camera to user
+    var off=Math.abs(((cam.dir-camToUser+540)%360)-180); // 0 = pointing straight at user
+    if(off<=55) return "toward";
+    if(off>=125) return "away";
+    return "across";
+  }
   function fmtDist(m){
     if(S.settings.units==="imperial"){
       var ft=m*3.28084;
@@ -388,10 +425,12 @@
             var id="n"+el.id;
             if(!S.cams.has(id)) added++;
             var t=el.tags||{};
+            var pd=parseDir(t["camera:direction"]!=null?t["camera:direction"]:t.direction);
             S.cams.set(id,{
               id:id, lat:el.lat, lon:el.lon, flock:isFlock(t),
               kind:t.surveillance_type||t["surveillance:type"]||"ALPR",
-              label:t.operator||t.manufacturer||t.brand||(isFlock(t)?"Flock Safety":"ALPR camera")
+              label:t.operator||t.manufacturer||t.brand||(isFlock(t)?"Flock Safety":"ALPR camera"),
+              dir:pd.deg, dirOmni:pd.omni, dirRange:pd.range
             });
           });
           S.lastFetch=Date.now(); S.fetchCenter={lat:lat,lon:lon}; S.fetching=false;
@@ -514,6 +553,14 @@
         g.appendChild(ping);
       }
       g.appendChild(mk("circle",{cx:x,cy:y,r:4,fill:col}));
+      // facing indicator: short tick in the camera's pointing direction (radar frame)
+      if(it.c.dirOmni){
+        g.appendChild(mk("circle",{cx:x,cy:y,r:7,fill:"none",stroke:col,"stroke-width":1,"opacity":.7}));
+      } else if(it.c.dir!=null){
+        var fr=((S.heading!=null?(it.c.dir-S.heading):it.c.dir))*Math.PI/180;
+        var L=10;
+        g.appendChild(mk("line",{x1:x,y1:y,x2:x+L*Math.sin(fr),y2:y-L*Math.cos(fr),stroke:col,"stroke-width":2,"stroke-linecap":"round","opacity":.95}));
+      }
     });
   }
   function mk(tag,attrs){var e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(var k in attrs)e.setAttribute(k,attrs[k]);return e;}
@@ -569,7 +616,21 @@
                '<span class="tag alpr" style="background:rgba(124,136,150,.16);color:var(--dim)">'+esc(c.kind)+'</span>';
     $("camTags").innerHTML=tags;
     var det="";
-    if(S.pos){ var d=haversine(S.pos.lat,S.pos.lon,c.lat,c.lon); var f=fmtDist(d); det+=f.n+" "+f.u+" away, to the "+compass(bearing(S.pos.lat,S.pos.lon,c.lat,c.lon))+".<br>"; }
+    var brg=null;
+    if(S.pos){ var d=haversine(S.pos.lat,S.pos.lon,c.lat,c.lon); var f=fmtDist(d); brg=bearing(S.pos.lat,S.pos.lon,c.lat,c.lon); det+=f.n+" "+f.u+" away, to the "+compass(brg)+".<br>"; }
+    // facing direction
+    if(c.dirOmni){
+      det += "Faces <b>all directions</b> (panning/dome camera).<br>";
+    } else if(c.dir!=null){
+      var faceTxt="Faces <b>"+compass(c.dir)+"</b> ("+Math.round(c.dir)+"°)";
+      var relf = (brg!=null) ? facingRelToUser(c, brg) : null;
+      if(relf==="toward") faceTxt+=" — pointing <b>toward you</b>";
+      else if(relf==="away") faceTxt+=" — pointing away from you";
+      else if(relf==="across") faceTxt+=" — pointing across your path";
+      det += faceTxt+(c.dirRange?" (approx; camera pans)":"")+".<br>";
+    } else {
+      det += "Facing direction not recorded.<br>";
+    }
     det += "Location: "+c.lat.toFixed(5)+", "+c.lon.toFixed(5)+"<br>";
     det += "Community-mapped data. If this looks wrong, moved, or missing, you can verify or correct it on OpenStreetMap — your edit feeds back to everyone.";
     $("camDetail").innerHTML=det;
@@ -752,6 +813,13 @@
     camLayer.clearLayers();
     list.slice(0,300).forEach(function(it){
       var col=it.c.flock?"#B57BFF":"#FFB02E";
+      // facing whisker: a short line from the camera in its pointing direction
+      if(it.c.dir!=null && !it.c.dirOmni){
+        var tip=destPoint(it.c.lat, it.c.lon, it.c.dir, 28);
+        L.polyline([[it.c.lat,it.c.lon], tip], {color:col, weight:3, opacity:.9}).addTo(camLayer);
+      } else if(it.c.dirOmni){
+        L.circle([it.c.lat,it.c.lon], {radius:18, color:col, weight:1, fill:false, opacity:.7}).addTo(camLayer);
+      }
       L.circleMarker([it.c.lat,it.c.lon],{radius:5, color:col, weight:1, fillColor:col, fillOpacity:.9})
         .bindPopup((it.c.flock?"Flock Safety":"ALPR")+" — "+esc(it.c.label))
         .addTo(camLayer);
