@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor: https://localhost; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: capacitor: https://localhost https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; connect-src 'self' capacitor: https://localhost https://overpass-api.de https://overpass.kumi.systems; object-src 'none'; base-uri 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor: https://localhost; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: capacitor: https://localhost https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; connect-src 'self' capacitor: https://localhost https://overpass-api.de https://overpass.kumi.systems https://nominatim.openstreetmap.org https://router.project-osrm.org https://api.openrouteservice.org; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0B0E11">
 <link rel="manifest" href="manifest.json">
@@ -125,6 +125,11 @@
   .cam{cursor:pointer}
   .cam:active{background:var(--panel)}
   .cam .chev{color:var(--dimmer); font-size:15px; flex:none; margin-left:2px}
+  #routeDest{width:100%; background:var(--panel-2); border:1px solid var(--hair); color:var(--txt); font-family:var(--ui); font-size:15px; padding:13px 14px; border-radius:11px}
+  #routeDest:focus{outline:none; border-color:var(--amber)}
+  #routeProvider,#orsKey{width:100%; background:var(--panel-2); border:1px solid var(--hair); color:var(--txt); font-family:var(--ui); font-size:14px; padding:11px 12px; border-radius:10px}
+  #routeProvider:focus,#orsKey:focus{outline:none; border-color:var(--amber)}
+  #routeResult b{color:var(--txt)}
 
   /* settings sheet */
   .sheet{position:fixed; inset:0; background:rgba(5,7,9,.6); backdrop-filter:blur(3px); display:none; align-items:flex-end; justify-content:center; z-index:2000}
@@ -178,6 +183,7 @@
     <div class="topbar">
       <div class="brand"><span class="dot" id="gpsDot"></span>Flock Watch</div>
       <div style="display:flex; gap:8px">
+        <button class="iconbtn" id="routeBtn" style="width:auto; padding:0 13px; font-size:13px; font-weight:600">Route</button>
         <button class="iconbtn" id="viewBtn" style="width:auto; padding:0 13px; font-size:13px; font-weight:600">Map</button>
         <button class="iconbtn" id="settingsBtn" aria-label="Settings">⚙</button>
       </div>
@@ -258,6 +264,16 @@
     <div class="toggle"><span class="txt">Vibration</span>
       <label class="switch"><input type="checkbox" id="vibeOn" checked><span class="slider"></span></label>
     </div>
+    <div class="setrow">
+      <div class="lbl"><span class="txt" style="font-size:14px;font-weight:600">Routing provider</span></div>
+      <select id="routeProvider">
+        <option value="demo">Public demo — no key (shared, rate-limited)</option>
+        <option value="ors">OpenRouteService — your API key</option>
+      </select>
+      <div class="hint">Used by the Route planner. Geocoding always uses OpenStreetMap (no key). Your key is stored only on this device and sent in a request header, never in a URL.</div>
+      <input id="orsKey" type="password" autocomplete="off" placeholder="OpenRouteService API key" style="display:none">
+      <div class="hint" id="orsHint" style="display:none">Free key at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>.</div>
+    </div>
     <button class="btn ghost" id="resetBtn" style="color:var(--red); border-color:rgba(229,72,77,.4)">Reset to defaults</button>
     <button class="btn ghost" id="closeSheet">Done</button>
   </div>
@@ -272,6 +288,19 @@
     <a id="camOsm" class="btn ghost" target="_blank" rel="noopener" style="display:block; text-align:center; text-decoration:none">View / edit on OpenStreetMap</a>
     <button class="btn ghost" id="camMap">Show on map</button>
     <button class="btn ghost" id="camClose">Close</button>
+  </div>
+</div>
+
+<!-- route planner -->
+<div class="sheet" id="routeSheet">
+  <div class="card">
+    <h2>Lower-exposure route</h2>
+    <p class="hint">Compares driving routes to a destination and shows the one that passes the <b>fewest</b> cameras. This is harm-reduction for privacy, not a guarantee — and to do it, your start and destination are sent to a public routing service (OpenStreetMap/OSRM).</p>
+    <input id="routeDest" type="text" inputmode="search" placeholder="Destination — address or place name" autocomplete="off">
+    <button class="btn" id="routeGo">Find routes</button>
+    <div id="routeResult" class="hint" style="min-height:18px"></div>
+    <button class="btn ghost" id="routeClear">Clear route</button>
+    <button class="btn ghost" id="routeClose">Close</button>
   </div>
 </div>
 
@@ -298,7 +327,7 @@
     settings:load()
   };
 
-  function defaults(){ return {alert:250, range:1000, aheadOnly:false, sound:true, voice:true, vibe:true, units:"imperial"}; }
+  function defaults(){ return {alert:250, range:1000, aheadOnly:false, sound:true, voice:true, vibe:true, units:"imperial", routeProvider:"demo", orsKey:""}; }
   function load(){
     var d=defaults();
     try{
@@ -311,6 +340,8 @@
         d.voice = s.voice!==false;
         d.vibe  = s.vibe!==false;
         d.units = s.units==="metric" ? "metric" : "imperial";
+        d.routeProvider = s.routeProvider==="ors" ? "ors" : "demo";
+        if(typeof s.orsKey==="string") d.orsKey=s.orsKey.slice(0,200);
       }
     }catch(e){}
     return d;
@@ -702,7 +733,8 @@
       var f=fmtDist(it.d);
       var who = it.c.flock ? "Flock camera" : "License plate camera";
       var where = it.ahead ? "ahead" : "nearby";
-      var u=new SpeechSynthesisUtterance(who+" "+where+", "+f.n+" "+f.full);
+      var facing = (it.c.dir!=null && it.b!=null && facingRelToUser(it.c, it.b)==="toward") ? ", facing you" : "";
+      var u=new SpeechSynthesisUtterance(who+" "+where+", "+f.n+" "+f.full+facing);
       u.rate=1.05;
       speechSynthesis.cancel();
       speechSynthesis.speak(u);
@@ -728,6 +760,11 @@
     $("soundOn").checked=S.settings.sound;
     $("voiceOn").checked=S.settings.voice;
     $("vibeOn").checked=S.settings.vibe;
+    $("routeProvider").value=S.settings.routeProvider;
+    $("orsKey").value=S.settings.orsKey||"";
+    var showKey = S.settings.routeProvider==="ors";
+    $("orsKey").style.display=showKey?"block":"none";
+    $("orsHint").style.display=showKey?"block":"none";
   }
   $("alertRange").addEventListener("input",function(){S.settings.alert=+this.value;$("alertVal").textContent=fmtSetting(S.settings.alert);save();recompute();});
   $("rangeRange").addEventListener("input",function(){S.settings.range=+this.value;$("rangeVal").textContent=fmtSetting(S.settings.range);save();recompute();});
@@ -736,6 +773,8 @@
   $("soundOn").addEventListener("change",function(){S.settings.sound=this.checked;save();});
   $("voiceOn").addEventListener("change",function(){S.settings.voice=this.checked;save(); if(this.checked) speakTest();});
   $("vibeOn").addEventListener("change",function(){S.settings.vibe=this.checked;save();});
+  $("routeProvider").addEventListener("change",function(){S.settings.routeProvider=this.value==="ors"?"ors":"demo";save();syncSettingsUI();});
+  $("orsKey").addEventListener("input",function(){S.settings.orsKey=this.value.trim().slice(0,200);save();});
   $("resetBtn").addEventListener("click",function(){
     if(!window.confirm("Reset all settings to defaults?")) return;
     S.settings=defaults(); save(); syncSettingsUI(); recompute(); toast("Settings reset to defaults");
@@ -748,6 +787,12 @@
   $("camClose").addEventListener("click",function(){$("camSheet").classList.remove("on");});
   $("camSheet").addEventListener("click",function(e){if(e.target===this)this.classList.remove("on");});
   $("recenterBtn").addEventListener("click",function(){ S.follow=true; if(map && S.pos) map.setView([S.pos.lat,S.pos.lon], map.getZoom()<13?16:map.getZoom()); });
+  $("routeBtn").addEventListener("click",function(){ $("routeSheet").classList.add("on"); setTimeout(function(){ try{ $("routeDest").focus(); }catch(e){} },60); });
+  $("routeClose").addEventListener("click",function(){ $("routeSheet").classList.remove("on"); });
+  $("routeSheet").addEventListener("click",function(e){ if(e.target===this) this.classList.remove("on"); });
+  $("routeGo").addEventListener("click",function(){ planRoute($("routeDest").value); });
+  $("routeDest").addEventListener("keydown",function(e){ if(e.key==="Enter"){ planRoute(this.value); } });
+  $("routeClear").addEventListener("click",clearRoute);
 
   // ---------- start ----------
   function isNative(){ return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); }
@@ -774,7 +819,7 @@
   });
 
   // ---------- map view (lazy-loaded Leaflet) ----------
-  var leafletReady=false, map=null, userMarker=null, alertCircle=null, camLayer=null;
+  var leafletReady=false, map=null, userMarker=null, alertCircle=null, camLayer=null, routeLayer=null;
   function toggleView(){
     S.mapView=!S.mapView;
     $("radarWrap").style.display = S.mapView?"none":"";
@@ -825,6 +870,138 @@
         .addTo(camLayer);
     });
   }
+
+  // ---------- lower-exposure route planner ----------
+  // Compares driving routes by how many cameras they pass and surfaces the fewest.
+  // Honest framing: privacy harm-reduction, not guaranteed avoidance. Routing
+  // sends start + destination to public OSM demo services (Nominatim + OSRM).
+  var ROUTE_BUFFER=160; // metres: count cameras within this distance of a route line
+  function setRouteMsg(html){ $("routeResult").innerHTML=html; }
+
+  function planRoute(destText){
+    if(!S.pos){ setRouteMsg("Waiting for your location — start watching first."); return; }
+    destText=(destText||"").trim();
+    if(!destText){ setRouteMsg("Enter a destination."); return; }
+    setRouteMsg("Looking up destination…");
+    geocode(destText).then(function(dest){
+      if(!dest){ setRouteMsg("Couldn’t find that destination."); return null; }
+      setRouteMsg("Finding routes…");
+      return fetchRoutes(S.pos, dest).then(function(routes){
+        if(!routes || !routes.length){ setRouteMsg("No driving route found."); return; }
+        return fetchCorridorCams(routes).then(function(){
+          var scored=routes.map(function(r){ return {r:r, cams:scoreRoute(r)}; });
+          scored.sort(function(a,b){ return (a.cams.count-b.cams.count) || (a.r.distance-b.r.distance); });
+          drawRoutes(scored, dest);
+          var best=scored[0];
+          var miles=(best.r.distance/1609.344).toFixed(1);
+          var mins=Math.round(best.r.duration/60);
+          var lines=scored.map(function(s,i){ return (i===0?"<b>Best:</b> ":"Alt: ")+s.cams.count+" cam"+(s.cams.count===1?"":"s"); }).join(" · ");
+          setRouteMsg("Lowest-exposure route: <b>"+best.cams.count+" camera"+(best.cams.count===1?"":"s")+"</b>, ~"+miles+" mi, ~"+mins+" min.<br>"+lines+"<br><span style=\"color:var(--dimmer)\">Counts only cameras mapped within "+ROUTE_BUFFER+" m of a route — coverage is incomplete. Tap Close to see the map.</span>");
+        });
+      });
+    }).catch(function(err){
+      if(err && err.message==="no-key"){ setRouteMsg("Enter your OpenRouteService key in Settings, or switch the routing provider to the public demo."); return; }
+      setRouteMsg("Routing failed — the service may be busy, unreachable, or rejecting the key. Try again.");
+    });
+  }
+
+  function geocode(q){
+    var url="https://nominatim.openstreetmap.org/search?format=json&limit=1&q="+encodeURIComponent(q);
+    return fetch(url,{headers:{"Accept":"application/json"}}).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.length){ return {lat:+j[0].lat, lon:+j[0].lon}; }
+      return null;
+    });
+  }
+
+  function fetchRoutes(o, d){
+    if(S.settings.routeProvider==="ors"){
+      var key=(S.settings.orsKey||"").trim();
+      if(!key) return Promise.reject(new Error("no-key"));
+      return fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
+        method:"POST",
+        headers:{ "Authorization":key, "Content-Type":"application/json", "Accept":"application/json" },
+        body:JSON.stringify({ coordinates:[[o.lon,o.lat],[d.lon,d.lat]], alternative_routes:{ target_count:3, share_factor:0.6, weight_factor:1.6 } })
+      }).then(function(r){ return r.json(); }).then(function(j){
+        if(!j || !j.features) return [];
+        return j.features.map(function(ft){
+          var c=ft.geometry.coordinates, pts=[];
+          for(var i=0;i<c.length;i+=2){ pts.push([c[i][1], c[i][0]]); }
+          var last=c[c.length-1]; if(last) pts.push([last[1], last[0]]);
+          var sum=(ft.properties&&ft.properties.summary)||{};
+          return {pts:pts, distance:sum.distance||0, duration:sum.duration||0};
+        });
+      });
+    }
+    // default: public OSRM demo
+    var url="https://router.project-osrm.org/route/v1/driving/"+o.lon+","+o.lat+";"+d.lon+","+d.lat+"?overview=full&geometries=geojson&alternatives=true";
+    return fetch(url).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || j.code!=="Ok" || !j.routes) return [];
+      return j.routes.map(function(rt){
+        var c=rt.geometry.coordinates, pts=[];      // GeoJSON is [lon,lat]; downsample
+        for(var i=0;i<c.length;i+=2){ pts.push([c[i][1], c[i][0]]); }
+        var last=c[c.length-1]; if(last) pts.push([last[1], last[0]]);
+        return {pts:pts, distance:rt.distance, duration:rt.duration};
+      });
+    });
+  }
+
+  // Pull ALPR cameras across the bounding box of the routes (clamped for sanity).
+  function fetchCorridorCams(routes){
+    var minLat=90,minLon=180,maxLat=-90,maxLon=-180;
+    routes.forEach(function(r){ r.pts.forEach(function(p){
+      if(p[0]<minLat)minLat=p[0]; if(p[0]>maxLat)maxLat=p[0];
+      if(p[1]<minLon)minLon=p[1]; if(p[1]>maxLon)maxLon=p[1];
+    });});
+    if(!isFinite(minLat)) return Promise.resolve();
+    if((maxLat-minLat)>1.2 || (maxLon-minLon)>1.2) return Promise.resolve(); // long trip: score with data already loaded
+    var q="[out:json][timeout:30];node[\"man_made\"=\"surveillance\"][\"surveillance:type\"=\"ALPR\"]("+minLat+","+minLon+","+maxLat+","+maxLon+");out body;";
+    return fetch(ENDPOINTS[0],{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"data="+encodeURIComponent(q)})
+      .then(function(r){ return r.json(); }).then(function(j){
+        (j.elements||[]).forEach(function(el){
+          if(el.type!=="node" || S.cams.has("n"+el.id)) return;
+          var t=el.tags||{}; var pd=parseDir(t["camera:direction"]!=null?t["camera:direction"]:t.direction);
+          S.cams.set("n"+el.id,{ id:"n"+el.id, lat:el.lat, lon:el.lon, flock:isFlock(t), kind:t.surveillance_type||t["surveillance:type"]||"ALPR", label:t.operator||t.manufacturer||t.brand||(isFlock(t)?"Flock Safety":"ALPR camera"), dir:pd.deg, dirOmni:pd.omni, dirRange:pd.range });
+        });
+      }).catch(function(){});
+  }
+
+  function scoreRoute(r){
+    var count=0, hits=[];
+    S.cams.forEach(function(c){
+      var min=Infinity;
+      for(var i=0;i<r.pts.length;i++){
+        var dd=haversine(c.lat,c.lon,r.pts[i][0],r.pts[i][1]);
+        if(dd<min) min=dd;
+        if(min<=ROUTE_BUFFER) break;
+      }
+      if(min<=ROUTE_BUFFER){ count++; hits.push(c); }
+    });
+    return {count:count, hits:hits};
+  }
+
+  function drawRoutes(scored, dest){
+    S.mapView=true; S.follow=false;
+    $("radarWrap").style.display="none"; $("mapWrap").style.display="block"; $("viewBtn").textContent="Radar";
+    ensureLeaflet(function(){
+      initMap();
+      setTimeout(function(){
+        if(!map) return;
+        map.invalidateSize();
+        if(!routeLayer) routeLayer=L.layerGroup().addTo(map); else routeLayer.clearLayers();
+        for(var i=scored.length-1;i>=0;i--){
+          var best=(i===0);
+          L.polyline(scored[i].r.pts, {color:best?"#36C691":"#7C8896", weight:best?6:3, opacity:best?.95:.5}).addTo(routeLayer);
+        }
+        scored[0].cams.hits.forEach(function(c){
+          var col=c.flock?"#B57BFF":"#FFB02E";
+          L.circleMarker([c.lat,c.lon],{radius:5,color:col,weight:1,fillColor:col,fillOpacity:.95}).addTo(routeLayer);
+        });
+        L.circleMarker([dest.lat,dest.lon],{radius:7,color:"#fff",weight:2,fillColor:"#E5484D",fillOpacity:1}).bindPopup("Destination").addTo(routeLayer);
+        try{ map.fitBounds(L.polyline(scored[0].r.pts).getBounds().pad(0.2)); }catch(e){}
+      },90);
+    });
+  }
+  function clearRoute(){ if(routeLayer) routeLayer.clearLayers(); setRouteMsg(""); }
 
   // ---------- offline camera cache ----------
   function persistCams(){
